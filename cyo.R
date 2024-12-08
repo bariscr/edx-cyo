@@ -3,9 +3,18 @@ if (!require("tidyverse")) install.packages("tidyverse")
 if (!require("caret")) install.packages("caret")
 if (!require("Matrix")) install.packages("Matrix")
 
-# Load the data. The data is in the data folder in a zipper format. 
-# If you want to run the code, you need to unzip the file first. 
-# Keep the unzipped file also in the data folder.
+# Load the data. The data is in the data folder in a zipped format. 
+# Uunzip the file automatically
+zipped_data <- "data/ECommerce_consumer behaviour.csv.zip"
+
+if (file.exists(zipped_data)) {
+  output_folder <- dirname(zipped_data)
+  
+  target_file <- "ECommerce_consumer behaviour.csv"
+  
+  unzip(zipped_data, files = target_file, exdir = output_folder)
+} 
+
 hunters_data <- 
   read.csv("data/ECommerce_consumer behaviour.csv")
 
