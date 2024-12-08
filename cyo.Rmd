@@ -1,0 +1,774 @@
+---
+title: "Product Recommendation System with Clustering and Principal Component Analysis"
+output:
+  pdf_document:
+    number_sections: true
+toc: TRUE
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning=FALSE)
+options(mem.maxVSize = 50e9)
+```
+
+```{r}
+# Load the necessary libraries (install if not available)
+if (!require("tidyverse")) install.packages("tidyverse")
+if (!require("caret")) install.packages("caret")
+if (!require("Matrix")) install.packages("Matrix")
+```
+
+\newpage
+
+# Introduction
+
+In this project we tried to create a system to predict best items to offer when someone buys an item or items. The main issue was to find solutions to a recommendation system for an e-grocery. We used data from Hunter's e-grocery from Kaggle and its contents and limitations directed the paths we have taken in the project. We made use of machine learning techniques, such as clustering and principal component analysis to make predictions. We analyzed the co-occurrence of the products in the orders and based our predictions on this analysis. We evaluated the models by applying them to the test data and comparing the predictions with the actual values in the test data.
+
+Our baseline model used departments that the products belong to, for understanding if simply suggesting other products from the same department would be a good recommendation. We then made predictions with a simple clustering model and finally upon building on this method we applied principal component analysis before clustering to see to what extent it improves the predictions. Then we decreased the number clusters to 10 from 21, which is the number of departments in the data, to see how the predictions would change. In this final model we were able to predict 15.6 percent of the co-occurrences in the test data, which is substantially higher than the previous models, which have given results of 5, 5.5 and 8.4 percent respectively. However, it should be noted that the improvement in the final model is solely due to the reduction in the number of clusters, but it can provide a basis for future work, which would consider tuning the number of clusters and their sizes.
+
+The project didn't only assist in developing an improved understanding with machine learning methods for the question at hand, but it also helped to build knowledge upon data limitations, what to look for in a dataset for such analysis and how to deal with the limitations for the best results.
+
+We start with an explanation on the information about the data to be used in the project and how to retrieve it. We continue with exploratory data analysis and expand on it with the insights derived from this analysis. This is followed by more in-depth analysis with machine learning methods and the results pertaining to the outputs, predictions and evaluations of the models that have been used. We conclude by emphasizing the limitations of the work, summarizing the results and providing suggestions for future work.
+
+## Data
+
+We retrieve the data from Kaggle. The dataset is from Hunter's e-grocery. We selected this dataset as it was a fairly large dataset that would allow analysis and testing of different models. The dataset is accessible through this [link](https://www.kaggle.com/datasets/hunter0007/ecommerce-dataset-for-predictive-marketing-2023/data).
+
+It's also included in the data folder of this project and can be loaded directly from there. The entire project can be accessed from [Github](https://github.com/bariscr/edx-cyo).
+
+Since Github doesn't allow large data files to be uploaded, the data file is provided in a zip file within the data folder. To correctly execute the code and to knit the Rmd the file the user needs to unzip the csv file. Only after this action, the following code will run to load the data.
+
+\
+
+```{r, echo=TRUE}
+# Load the data. The data is in the data folder in a zipper format. 
+# If you want to run the code, you need to unzip the file first. 
+# Keep the unzipped file also in the data folder.
+hunters_data <- 
+  read.csv("data/ECommerce_consumer behaviour.csv")
+```
+
+In the project, we mostly prefer to refer to the basket contents as products instead of items to be in line with the data in context. The basket is referred to as the order. The customers are referred to a users. In any case, these terms can be used interchangeably within the text and the reader should know they refer to the same thing, unless explicitly stated otherwise.
+
+\newpage
+
+# Analysis
+
+## Description of the dataset
+
+The dataset is not described in detail in the source. We will make assumptions wherever necessary, based on the column names and the data itself.
+
+First, we have a general look at the dataset with the glimpse function to understand the structure of the data. We see that it is comprised of 2,019,501 rows and 12 columns.
+
+```{r}
+# General look at the data
+hunters_data |> glimpse()
+```
+
+Then we have a look at each variable for missing values and number of unique values. For each variable, the first line of the outputs shows the number of missing values and the second line shows the number of unique values. We see that there are no missing values in the dataset except for one variable, where the missing observations actually refer to a specific situation.
+
+### order_id
+
+```{r}
+# Number of missing values and unique values for order_id
+cat("Number of missing values:", sum(is.na(hunters_data$order_id)), "\n")
+cat("Number of unique values:", unique(hunters_data$order_id) |> length(), "\n")
+```
+
+### user_id
+
+```{r}
+# Number of missing values and unique values for user_id
+cat("Number of missing values:", sum(is.na(hunters_data$user_id)), "\n")
+cat("Number of unique values:", unique(hunters_data$user_id) |> length(), "\n")
+
+```
+
+There are different number of orders in the data for each user. The data includes a maximum of 15 orders for one user. A major portion of the users have only one order in the dataset. This would be limiting any temporal analysis and evaluation of the predictions from within the data, such as predicting the users' next orders and evaluating with the actual next orders. One way to deal with this limitation could be to make use of cross-validation by splitting the data into a training and test set. Another option could be to disregard one order users in the data, which would substantially reduce the size of the available data for such analysis. It would also cause loss of variability in the data.
+
+```{r}
+# Plot the number of orders by user
+hunters_data |> 
+  distinct(user_id, order_id) |>
+  count(user_id) |>
+  count(n) |>
+  arrange(n) |> 
+  ggplot(aes(x = n, y = nn)) +
+  geom_col() +
+  labs(title = "Number of Users by Orders", x = "Number of Orders", y = "Number of Users") +
+  theme_minimal()
+```
+
+### order_number
+
+This is explained as the number of the order made by the individual. 
+
+```{r}
+# Number of missing values and unique values for order_number
+cat("Number of missing values:", sum(is.na(hunters_data$order_number)), "\n")
+cat("Number of unique values:", unique(hunters_data$order_number) |> length(), "\n")
+
+```
+
+When we look at the data for a user, we see that the order numbers do not follow a sequential order and increase by 1. For example, when we select user_id = 23986 and sort by the order_number, we see that order_number 4 is followed by order_number 23.
+
+```{r, eval=TRUE, echo=TRUE}
+# Look at the data to check if the order_number is sequential for a user
+hunters_data |> 
+  filter(user_id == 23986) |>
+  arrange(order_number) |>
+  select(1:4, 6) |>
+  head(10) 
+```
+
+This shows us that the data is not comprehensive with regards to any user and period. It's a selection of orders and it is not possible to understand the exact time of the orders, but only we can understand which order is followed by which order for a user. As it's not comprehensive and the sampling method is not clearly stated, we can mention this as a shortcoming of the predictions to be produced from this dataset.
+
+The following plot is based on the maximum value of order_number variable for each user. It show the total orders that were made by a user. The maximum is 100, which is probably a  deliberately set cut off point. There are still many users with one order observed in the plot, however it's not proportionally as high as the number of users with one order in the dataset. This is more likely to be closer to the real distribution of the orders by user.
+
+```{r}
+# Plot the number of total orders by user
+hunters_data |> 
+  group_by(user_id) |>
+  summarize(max_orders = max(order_number)) |>
+  count(max_orders) |> 
+  ggplot(aes(x = max_orders, y = n)) +
+  geom_col() +
+  labs(title = "Number of Total Orders by User", x = "Number of Total Orders", y = "Number of Users") +
+  theme_minimal()
+```
+
+### order_dow
+
+This variable corresponds to the day of the week that the order was placed. The variable have values from 0 to 6 and based on the discussion on the Kaggle page, we understand that 0 is Monday. 
+
+```{r}
+# Number of missing values and unique values for order_dow
+# List of unique values for order_dow
+cat("Number of missing values:", sum(is.na(hunters_data$order_dow)), "\n")
+cat("Number of unique values:", unique(hunters_data$order_dow) |> length(), "\n")
+unique(hunters_data$order_dow) |> sort()
+```
+
+We replace the numbers with the corresponding days of the week.
+
+```{r}
+# Replace the numbers with the corresponding days of the week
+hunters_data <- 
+  hunters_data |> 
+  mutate(order_dow = recode_factor(
+    order_dow,
+    `0` = "Monday",
+    `1` = "Tuesday",
+    `2` = "Wednesday",
+    `3` = "Thursday",
+    `4` = "Friday",
+    `5` = "Saturday",
+    `6` = "Sunday"
+  ))
+```
+
+Then we visualize the distribution of the data by day of the week. First we do this for items, showing number of items purchased on each day of the week. We see that most items are bought on Monday, followed by Tuesday and Sunday.
+
+```{r}
+# Plot the number of items purchased per day
+hunters_data |> 
+  count(order_dow) |> 
+  ggplot(aes(x = order_dow, y = n)) +
+  geom_col() +
+  labs(title = "Number of Items Purchased per Day", x = "", y = "Number of Items") +
+  theme_minimal()
+```
+
+Then we have a look by grouping by orders to see the number of orders placed per day. The main pattern is similar to the number of items purchased per day for Monday and Tuesday. However, Sunday is no more in the top 3 days for number of orders placed, and comes after Wednesday and Saturday. This depicts that the number of items purchased on Sunday is generally higher compared to Wednesday and Saturday.
+
+```{r}
+# Plot the number of orders placed per day
+hunters_data |> 
+  distinct(order_id, order_dow) |> 
+  count(order_dow) |>
+  ggplot(aes(x = order_dow, y = n)) +
+  geom_col() +
+  labs(title = "Number of Orders Placed per Day", x = "", y = "Number of Orders") +
+  theme_minimal()
+```
+
+### order_hour_of_day
+
+The hour when the order was placed also provides valuable information. This information also can be combined with the day of the order to understand specifics of order timing for each day.
+
+```{r}
+# Number of missing values and unique values for order_hour_of_day
+# List of unique values for order_hour_of_day
+cat("Number of missing values:", sum(is.na(hunters_data$order_hour_of_day)), "\n")
+cat("Number of unique values:", unique(hunters_data$order_hour_of_day) |> length(), "\n")
+unique(hunters_data$order_hour_of_day) |> sort()
+```
+
+Once again, we visualize the distribution of the data by hour of the day. The number of items purchased peak at 11 am, followed by 12. We see that peak hours are between 11 am and 4 pm. The hours can also be group into categories.
+
+```{r}
+# Plot the number of items purchased per hour
+hunters_data |> 
+  count(order_hour_of_day) |> 
+  ggplot(aes(x = order_hour_of_day, y = n)) +
+  geom_col() +
+  labs(title = "Number of Items Purchased per Hour", x = "", y = "Number of Items") +
+  theme_minimal()
+```
+
+The pattern is slightly different when we look at the number of orders placed per hour, where the peak hour becomes 10 am. 
+
+```{r}
+# Plot the number of orders placed per hour
+hunters_data |> 
+  distinct(order_id, order_hour_of_day) |> 
+  count(order_hour_of_day) |>
+  ggplot(aes(x = order_hour_of_day, y = n)) +
+  geom_col() +
+  labs(title = "Number of Orders Placed per Hour", x = "", y = "Number of Orders") +
+  theme_minimal()
+```
+
+### days_since_prior_order
+
+There are missing values in this variable, which would mean that it's the first order of the user. The unique values are from 0 to 30. From this we understand that the variable shows the number of days since the last order within a month.
+
+```{r}
+# Number of missing values and unique values for days_since_prior_order
+# List of unique values for days_since_prior_order
+cat("Number of missing values:", sum(is.na(hunters_data$days_since_prior_order)), "\n")
+cat("Number of unique values:", unique(hunters_data$days_since_prior_order) |> length(), "\n")
+unique(hunters_data$days_since_prior_order) |> sort()
+```
+
+Here we focus on the orders only, disregaring the number of items included. Based on the visual we can assume that the orders are repeated on the 30th and 7th days. It is understood that the tendency is monthly and weekly repeats in orders. 
+
+```{r}
+# Plot the number of orders placed by days since prior order
+hunters_data |> 
+  distinct(order_id, days_since_prior_order) |> 
+  count(days_since_prior_order) |>
+  ggplot(aes(x = days_since_prior_order, y = n)) +
+  geom_col() +
+  labs(title = "Number of Orders Placed by Days Since Prior Order", x = "", y = "Number of Orders") +
+  theme_minimal()
+```
+
+### product_id
+
+```{r}
+# Number of missing values and unique values for product_id
+cat("Number of missing values:", sum(is.na(hunters_data$product_id)), "\n")
+cat("Number of unique values:", unique(hunters_data$product_id) |> length(), "\n")
+
+```
+
+We look at the number of items in an order. This would give the same results with the add_to_cart_order variable, but here we go by counting the number products in an order where in the latter we only check for the maximum value of add_to_cart_order of in an order. Also in this plot we use a histogram with a bandwidth of 1 instead of a bar plot. However, as mentioned the outputs are the same.
+
+```{r}
+# Plot the number of products in an order
+hunters_data |> 
+  count(order_id) |>
+  ggplot(aes(x = n)) +
+  geom_histogram(binwidth = 1) +
+  labs(title = "Number of Products in an Order", x = "Number of Products", y = "Number of Orders") +
+  theme_minimal()
+
+```
+
+### add_to_cart_order
+
+This variable shows the order of the items added to the cart. There is a maximum of 137 items added to the cart. The maximum number in each order is the also the number of total items in the cart.
+
+```{r}
+# Number of missing values and unique values for add_to_cart_order
+# List of unique values for add_to_cart_order
+cat("Number of missing values:", sum(is.na(hunters_data$add_to_cart_order)), "\n")
+cat("Number of unique values:", unique(hunters_data$add_to_cart_order) |> length(), "\n")
+unique(hunters_data$add_to_cart_order)
+```
+
+Mostly, the number of items added to the cart is 5, followed by 6 and 4, and decreasing as the number of items added to the cart increases. It is a highly right-skewed distribution, as would be expected.
+
+```{r}
+# Plot the number of orders placed by cart size
+hunters_data |> 
+  group_by(order_id) |> 
+  summarize(cart_size = max(add_to_cart_order)) |>
+  count(cart_size) |>
+  ggplot(aes(x = cart_size, y = n)) +
+  geom_col() +
+  labs(title = "Number of Orders Placed by Cart Size", x = "Cart Size", y = "Number of Items") +
+  theme_minimal()
+```
+
+
+### reordered
+
+This variable has two values, 0 and 1. It appears to show that if the value is 1, the product was ordered by this user before and if it is 0, this is the first time the product is ordered by this user. But what the first order of the user is not clear from the data, it could be referring to the first order of the product in that month. Even so, in the data there are products with the same id and name, but they have different values (some 0 and some 1) for the same user and order. So, it is not clear how this variable is generated.
+
+```{r}
+# Number of missing values and unique values for reordered
+# List of unique values for reordered
+cat("Number of missing values:", sum(is.na(hunters_data$reordered)), "\n")
+cat("Number of unique values:", unique(hunters_data$reordered) |> length(), "\n")
+unique(hunters_data$reordered)
+```
+
+### department_id
+
+There are 21 departments in the dataset. 
+
+```{r}
+# Number of missing values and unique values for department_id
+# List of unique values for department_id
+cat("Number of missing values:", sum(is.na(hunters_data$department_id)), "\n")
+cat("Number of unique values:", unique(hunters_data$department_id) |> length(), "\n")
+unique(hunters_data$department_id) |> sort()
+```
+
+### department
+
+The departments are listed below.
+
+```{r}
+# Number of missing values and unique values for department
+# List of unique values for department
+cat("Number of missing values:", sum(is.na(hunters_data$department)), "\n")
+cat("Number of unique values:", unique(hunters_data$department) |> length(), "\n")
+unique(hunters_data$department) |> sort()
+```
+
+The highest number of orders are from the produce department, followed by dairy/eggs.
+
+```{r}
+# Plot the number of orders by department
+hunters_data |> 
+  distinct(order_id, department) |> 
+  count(department) |>
+  ggplot(aes(x = reorder(department, n), y = n)) + 
+  geom_col() +
+  labs(title = "Number of Orders by Department", x = "", y = "Number of Orders") +
+  theme_minimal() +
+  coord_flip() 
+
+```
+
+### product_name
+
+Here, we list the 134 unique product names in the dataset.
+
+```{r}
+# Number of missing values and unique values for product_name
+# List of unique values for product_name
+cat("Number of missing values:", sum(is.na(hunters_data$product_name)), "\n")
+cat("Number of unique values:", unique(hunters_data$product_name) |> length(), "\n")
+unique(hunters_data$product_name) |> sort()
+
+```
+
+Fresh fruits and fresh vegetables are the most ordered products followed by packaged vegetables/fruits, yogurt and milk. In this plot we take a count of the products regardless of the order, meaning that a product can appear multiple times in one order. However we are interested in the preferences in general first. As there are more than 100 products, we filter out the products that have been ordered less than 10,000 for better visualisation of the remaining products.
+
+```{r, fig.height=10, fig.width=6}
+# Plot the number of orders by product
+hunters_data |> 
+  count(product_name) |>
+  filter(n > 10000) |> 
+  ggplot(aes(x = reorder(product_name, n), y = n)) + 
+  geom_col() +
+  labs(title = "Number of Products", x = "", y = "Number of Orders") +
+  theme_minimal() +
+  coord_flip() 
+
+```
+
+From the categories of this variable, we also understand that at least some of the products actually refer to a more general category, such as fresh fruits, where there are actually multiple products under the category of which the details are not provided in the dataset. This is also a limitation of the dataset, when this is especially considered together with the reordered variable, showing that some of the subcategories are reordered and some are not, but we don't have an insight on the specifics of these products.
+
+It should also be known that some products are consumed less frequently and therefore are not ordered as much as others. One would expect food products to be ordered in most of the orders. Also as expected there are multiple types of the same product because food products are available in various types.
+
+The plot provided us most of the frequently ordered products, however it would be useful to least frequently ordered products as well. For this puspose we plot products that are ordered less than 2,000 times in the dataset. It's seen that the products are mostly utensils and long-lasting products. There are also some food products, which are very specific. 
+
+```{r, fig.height=10, fig.width=6}
+# Plot the products that are ordered less than 2,000 times
+hunters_data |> 
+  count(product_name) |>
+  filter(n < 2000) |> 
+  ggplot(aes(x = reorder(product_name, desc(n)), y = n)) + 
+  geom_col() +
+  labs(title = "Number of Products", x = "", y = "Number of Orders") +
+  theme_minimal() +
+  coord_flip() 
+
+```
+
+## Insights from the exploratory data analysis
+
+So far, we made the basic exploratory data analysis and gained valuable insights from the dataset. 
+
+The data doesn't clarify how it was sampled from its source and the information on the source and the dataset itself are not clearly stated.
+
+The data is structured as such that the orders of users (customers) are registered consisting of the products included in the cart (basket). We have the names of the products along with the department they belong to. We know have many products are there in each order and the order of the products in the cart, so that we can see which product was followed by which product. We also know if the product was reordered by the user or not, although it's not clear how this variable is generated.
+
+We also have temporal information, as the days and the hours of the orders, along with the days since the prior order. These can be providing some patterns with regards to users (customers) and products.
+
+We understood from the data that within one order there can be multiple products of the same category.
+
+* A user gives an order.
+* An order includes products in it.
+* The products are related to a department.
+* The products within an order may repeat, but this is because the subcategories of the products are not provided.
+* A product is reordered or not.
+
+Temporal characteristics:
+
+* The order is placed on a day of the week.
+* The order is placed on an hour of the day.
+* The order is placed after a certain number of days since the prior order.
+* A product is added to the cart in a certain order.
+* The data does not have a timestamp for the orders.
+* Most of the users have only one order in the dataset.
+
+## Models
+
+There are many approaches that can be taken to make the predictions for the intended recommendation system. We will rely on the availability of the products in the orders mainly. We will model the co-occurrence of the products in the orders and evaluate the validity of the model with the test data. The question to be answered by this analysis can be summarized as: 
+
+"If there is one product in the order of the user, how likely is it that the other product from a group (cluster) of product suggestions will be in the same order?" 
+
+If the likelihood is high, then the two products are likely to be purchased together and a recommendation system can be built based on this information. We will create clusters of products and when there is one product in the order we will be suggesting the other products in the same cluster. As the products may repeat in the orders, we will consider only distinct cases. By taking distinct values of products in each order, we are ignoring the purchase of multiple products of the same kind in one order. The repeating products are mostly higher level categories of products in essence, as the subcategories are not provided in the dataset. This will be a limitation in the analysis.
+
+The available data will also pose limitations in this approach as there are many orders with only one product in it. This will be a restricting factor. Another shortcoming in our approach is that we suggest products from a cluster, meaning that there will be many suggestions for one product in some cases. 
+
+As a baseline we will use the department information as a basis for the clusters and suggest products from the same department. This itself would be expected to provide a good prediction and we will see if other models will provide better predictions.
+
+We will use two main methods to model and make predictions. The first will be the simple clustering method. The second will follow a path of dimension reduction with principal component analysis (PCA) before the clustering operation, which will allow us to see the effectiveness of the dimension reduction in the predictions.
+
+Other variables in the data set can make significant contributions to our analysis, however we will not employ them in this project to avoid further complexity. We will look into the co-occurrence of the products in the orders, also disregarding any temporal information. 
+
+We will evaluate the validity of the models by creating the model on the training data and testing it by applying the models to the test data and comparing the predictions with the actual values in the test data.
+
+### Training and Test Data
+
+We start by splitting the data into training and test data. We will use the training data to create the models and the test data to evaluate the models. We will use the caret package for this purpose. The training data consist of 90 percent of the data and the test data will consist of 10 percent of the data. 
+
+```{r}
+# Set seed for reproducibility
+set.seed(1)
+# Create training and test data with 10 percent of the data as test data
+test_index <- createDataPartition(y = hunters_data$order_id, p = 0.1, list = FALSE)
+
+train_data0 <- hunters_data[-test_index, ] # 90% of the data
+test_data0 <- hunters_data[test_index, ]   # 10% of the data
+
+# Ensure `order_id`s and `user_id`s in test_data are also in train_data
+# In this project this is not necessary as we are not using the user_id variable, but in case the model would be improved by using this information in the future, this step would be necessary.
+test_data <- test_data0 |>
+  semi_join(train_data0, by = "order_id") |>
+  semi_join(train_data0, by = "user_id")
+
+# Add back any rows that were removed from test_data0 to `train_data`
+removed_rows <- anti_join(test_data0, test_data)
+train_data <- bind_rows(train_data0, removed_rows)
+
+# Clean up temporary variables
+rm(train_data0, test_data0, removed_rows)
+```
+
+### Model with Departments
+
+We start with the model where we make our suggestions based on the departments of the products. When a product is in the order we will suggest any other product from the same department. We will evaluate the model with the test data.
+
+We generate a vector of the products in the orders.
+
+```{r}
+# Generate a vector of unique product_ids
+product_list <- 
+  hunters_data |> 
+  select(product_name) |> 
+  unique() |> 
+  pull()
+```
+
+We would like to cluster the products to check their co-occurrence in the orders. By taking distinct values of products in each order, we are ignoring the purchase of multiple products of the same kind in one order. In corrrespondence with the departments, we created 21 clusters.
+
+```{r}
+# Generate clusters based on department
+clusters <- 
+  train_data |> 
+  select(product_name, department) |> 
+  distinct() |> 
+  mutate(cluster_id = as.numeric(factor(department))) # Assign cluster IDs
+
+# Convert clusters to a named vector with cluster ids and product names
+clusters <- 
+  clusters |> 
+  arrange(cluster_id) |> 
+  select(product_name, cluster_id) |> 
+  deframe()
+
+```
+
+#### Evaluation
+
+We evaluate the model with the test data. The baseline model gives a value of 0.04995, meaning that 5 percent of the co-occurrences between two products in the test data are aligned with the clusters. Only by suggesting products from the same department, we can predict 5 percent of the co-occurrences in the test data.
+
+```{r}
+# Create a order_product_test data frame with distinct values of order_id and product_name
+order_product_test <- 
+  test_data |> 
+  select(order_id, product_name) |> 
+  distinct() |> 
+  mutate(product_name = factor(product_name, levels = product_list),
+         order_id = factor(order_id))
+
+# Create product by order matrix for test data
+matrix_test <- sparseMatrix(
+  i = as.integer(order_product_test$order_id), 
+  j = as.integer(order_product_test$product_name),
+  x = 1,
+  dims = c(length(unique(order_product_test$order_id)), length(product_list))
+)
+
+# Create co-occurrence matrix for the test data
+co_occurrence_test <- t(matrix_test) %*% matrix_test
+# Select product pairs with co-occurrence
+pairs_test <- which(co_occurrence_test > 0, arr.ind = TRUE)
+# We drop out pairs of the same product
+pairs_test <- pairs_test[pairs_test[, 1] != pairs_test[, 2], ]
+
+# Prepare data to compare co-occurrences in test data with train clusters
+# First set the count of co-occurrences aligned with clusters to 0 for a starting point
+same_cluster_count <- 0
+# Get the total number of pairs
+pairs_total <- nrow(pairs_test)
+
+# Rename clusters to train_clusters to be used in the evaluation
+train_clusters <- clusters
+
+# Compare co-occurrences in test data with train clusters
+for (i in 1:pairs_total) {
+  prod1 <- pairs_test[i, 1]
+  prod2 <- pairs_test[i, 2]
+  if (train_clusters[prod1] == train_clusters[prod2]) {
+    same_cluster_count <- same_cluster_count + 1
+  }
+}
+
+# Get the proportion of test co-occurrences aligned with clusters
+alignment_score <- same_cluster_count / pairs_total
+cat("Proportion of test co-occurrences aligned with clusters:", alignment_score)
+
+```
+
+### Model with Simple Clustering
+
+Then we will do clustering of to detect commonly ordered products together. We will use Jaccard distance to measure the similarity between two products. We would like to cluster the products to check their co-occurrence in the orders. We create the model for the training data.
+
+```{r}
+# Create a order_product_train data frame with distinct values of order_id and product_name
+order_product_train <- 
+  train_data |> 
+  select(order_id, product_name) |> 
+  distinct() |> 
+  mutate(product_name = factor(product_name, levels = product_list),
+         order_id = factor(order_id))
+# Create product by order matrix for training data
+matrix_train <- 
+  sparseMatrix(
+    i = as.integer(order_product_train$order_id), 
+    j = as.integer(order_product_train$product_name),
+    x = 1,
+    dims = c(length(unique(order_product_train$order_id)), length(product_list))
+)
+# Create co-occurrence matrix for the training data
+co_occurrence_train <- t(matrix_train) %*% matrix_train
+
+# Calculate similarity scores with Jaccard index
+freq_train <- diag(co_occurrence_train)
+
+# Compute Jaccard similarity for each pair
+# co_occurrence[i,j] / (freq[i] + freq[j] - co_occurrence[i,j])
+jaccard_train <- matrix(0, nrow=length(product_list), ncol=length(product_list))
+for (i in seq_along(product_list)) {
+  for (j in seq_along(product_list)) {
+    numerator <- co_occurrence_train[i,j]
+    denominator <- freq_train[i] + freq_train[j] - numerator
+    if (denominator > 0) {
+      jaccard_train[i,j] <- numerator / denominator
+    } else {
+      jaccard_train[i,j] <- 0
+    }
+  }
+}
+
+# Do the clustering
+distance_matrix_train <- as.dist(1 - jaccard_train)
+
+hc_train <- hclust(distance_matrix_train, method = "ward.D2")
+
+```
+
+We create a 21 cluster division for the products to make it comparable to the departments and see the number of products in each cluster. We provide a plot for the cluster sizes.
+
+```{r}
+# Create 21 clusters
+k <- 21
+train_clusters <- cutree(hc_train, k = k) 
+
+# Plot the cluster sizes for the obtained clusters
+cluster_summary <- table(train_clusters)
+data.frame(cluster_summary) |> 
+  ggplot(aes(x = factor(1:k), y = Freq)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Cluster Sizes", x = "Clusters", y = "Number of Products") +
+  theme_minimal()
+
+```
+
+#### Evaluation
+
+We finally evaluate the model with the test data. We use 21 clusters for our predictions. The alignment score is 0.548, indicating a 5.5 percent match. The clustering technique provided a slight improvement over only using the departments.
+
+```{r}
+# Prepare data to compare co-occurrences in test data with train clusters
+# First set the count of co-occurrences aligned with clusters to 0 for a starting point
+same_cluster_count <- 0
+# Get the total number of pairs
+pairs_total <- nrow(pairs_test)
+
+for (i in 1:pairs_total) {
+  prod1 <- pairs_test[i, 1]
+  prod2 <- pairs_test[i, 2]
+  if (train_clusters[prod1] == train_clusters[prod2]) {
+    same_cluster_count <- same_cluster_count + 1
+  }
+}
+
+# Get the proportion of test co-occurrences aligned with clusters
+alignment_score <- same_cluster_count / pairs_total
+cat("Proportion of test co-occurrences aligned with clusters:", alignment_score)
+
+```
+
+### Model with Principal Component Analysis
+
+Now we would like to see the effect of dimension reduction in forming the clusters. We use PCA method for this application. With PCA a more effective clustering was intended to be achieved. The data was reduced to 90 percent of the variance. The reduced data was then used for k-means clustering, dividing the products into 21 clusters.
+
+```{r}
+# Prepare the data for PCA
+co_occurrence_scaled <- scale(co_occurrence_train)
+
+# Perform PCA
+pca_result <- prcomp(co_occurrence_scaled, scale. = FALSE)
+
+# Create explained variance
+explained_variance <- cumsum(pca_result$sdev^2) / sum(pca_result$sdev^2)
+
+# Restrict the number of components to those that explain 90 percent of the variance
+num_components <- which(explained_variance >= 0.9)[1]  
+pca_coordinates <- pca_result$x[, 1:num_components]
+
+# Cluster the products using the coordinates resulting from PCA
+set.seed(1)
+train_pca_clusters <- kmeans(pca_coordinates, centers = 21, nstart = 10)$cluster
+
+```
+
+#### Evaluation
+
+Using PCA before clustering in a model with 21 clusters, improved the evaluation score to 0.08362, imdicating that 8.4 percent of the co-occurrences in the test data are aligned with the clusters, which is well over the simple clustering model.
+
+```{r}
+# Prepare data to compare co-occurrences in test data with train clusters
+# First set the count of co-occurrences aligned with clusters to 0 for a starting point
+same_cluster_count <- 0
+# Get the total number of pairs
+pairs_total <- nrow(pairs_test)
+
+for (i in 1:pairs_total) {
+  prod1 <- pairs_test[i, 1]
+  prod2 <- pairs_test[i, 2]
+  if (train_pca_clusters[prod1] == train_pca_clusters[prod2]) {
+    same_cluster_count <- same_cluster_count + 1
+  }
+}
+
+# Get the proportion of test co-occurrences aligned with clusters
+alignment_score_pca <- same_cluster_count / pairs_total
+cat("Proportion of test co-occurrences aligned with PCA clusters:", alignment_score_pca, "\n")
+```
+
+### Model with 10 Clusters
+
+Then we limit the number of clusters to 10, meaning that we will be suggesting more products at once. It is obvious that as we decrease the number of clusters, we will be getting higher co-occurences. Although it might not be ideal for a suggestion system to provide too many options, we would like to see how the co-occurrence would change. In another study the clusters can be set to an ideal size and the models can be generated by utilizing other methods to make it more effective. Or the optimal cluster size can be looked for depending on the targeted evaluation score.
+
+In this case, the evaluation score indicates that the likelihood increases to 0.1555, with 10 clusters. With this model we are able to predict 15.6 percent of the co-occurrences in the test data.
+
+```{r}
+# We already have the distances, so only change the number of clusters
+set.seed(1)
+train_pca_clusters <- kmeans(pca_coordinates, centers = 10, nstart = 10)$cluster
+
+# Prepare data to compare co-occurrences in test data with train clusters
+# First set the count of co-occurrences aligned with clusters to 0 for a starting point
+same_cluster_count <- 0
+# Get the total number of pairs
+pairs_total <- nrow(pairs_test)
+
+for (i in 1:pairs_total) {
+  prod1 <- pairs_test[i, 1]
+  prod2 <- pairs_test[i, 2]
+  if (train_pca_clusters[prod1] == train_pca_clusters[prod2]) {
+    same_cluster_count <- same_cluster_count + 1
+  }
+}
+
+# Get the proportion of test co-occurrences aligned with clusters
+alignment_score_pca <- same_cluster_count / pairs_total
+cat("Proportion of test co-occurrences aligned with PCA clusters:", alignment_score_pca, "\n")
+
+```
+
+\newpage
+
+# Results
+
+Creating a recommendation system for a customer is not straightforward, but we have utilized two models and evaluated their validity. The models can be improved and developed further.
+
+With the data at hand we found that simply clustering is better than using the departments for the predictions. The simple clustering model provided a 5.5 percent alignment score, which was over the 5 percent alignment score of the department model. The PCA model provided better results with 21 clusters, with an alignment score of 8.8 percent. The model with 10 clusters provided an alignment score of 15.6 percent. The improvement with smaller number of clsuters don't indicate an improvement in the prediction, but rather an increase in the likelihood of the co-occurrences. In another study, the ideal number of clusters can also be looked for, depending on the targeted evaluation score.
+
+| **Model**                          | **Alignment Score** |
+|------------------------------------|---------------------|
+| Model with Departments as Clusters | 0.04995              |
+| Model with Simple Clustering       | 0.0548              |
+| Model with PCA, 21 Clusters        | 0.0836              |
+| Model with PCA, 10 Clusters        | 0.1555              |
+
+\newpage
+
+# Conclusion
+
+In this project we have analysed the dataset from Hunter's e-grocery in detail and using various methods tried to predict the best items to offer when a customer buys an item or items.  The project allowed us to explore methods to use for such predictions.
+
+There were some limitations to the data at hand, which prevented better, more accurate and reliable predictions. First limitation of the project was regarding the metadata of the dataset, which was not provided in detail. This required making assumptions where it was not clear what the variables represented. 
+
+The dataset is not comprehensive for a period of time or a user, and the sampling method is not clearly stated. This is a major shortcoming that would affect any insights from the dataset, as the sampling method would definitely be affective on the outputs. In relation to this, it's also not possible to make accurate temporal analysis, as no exact timestamp is provided for the orders, except for generalized timing information. Comprehensivity of the data is important because without a comprehesive data the found patterns would be biased and misleading. One can easily see that some products are normally purchased less frequently and when the data is not comprehensive, it's not possible to detect the average frequency for the purchase of these products. In addition, the lack of information on the amount purchased, its price and the demographics of the customers highly limit the accurary of the predictions.
+
+There is only one order for pertaining to some users in the dataset. Another limitation was that not all orders had more than one item, as such orders were not useful for the predictions. 
+
+In short, lack of comprehensivity of the dataset and lack of many potential covariates that could be effective on the predictions are the main limitations for such analysis and predictions.
+
+Baring these limitations in mind, we tried to exploit the data at hand to make predictions. We started with an exploratory data analysis, where we looked at each variable in detail. This allowed us to gain insights from the data at hand, its above-mentioned limitations for analysis and potential inferences that can be made from the data.
+
+We used a clustering model and PCA. Our models improved with clustering and then with PCA. Decreasing the number of clusters to 10 enabled to predict 15.6 percent of the co-occurrences in the test data. The final model with smaller number of clusters doesn't mean an improvement in the model, but it shows the improvement in the likelihood of the co-occurrences. This can provide a basis for further studies to find the optimal number of clusters for the predictions.
+
+We didn't analyze the effect of different clustering methods. And our evaluation metric was a simple one, not taking into consideration any ranking of the order products. The model and the evaluation metric can be improved by taking into consideration by predicting the next product that would be added to the order.
+
+As future work, first a larger dataset would be useful. It should also be comprehensive to grasp the patterns correctly. If it's sampled from a data, the sampling method should be valid and well reported.
+
+The data does not include any information on the demographics of the customers. Such information would be very useful to undestand the patterns for different groups of customers and make suggestions accordingly. An ideal data for such analysis should include information on the subcategories of the products, timestamp of the orders, amount purchased and its price. A more clearly defined data would definitely help in making more accurate predictions. 
+
+# References
+
+* Irizzary, R. A., 2019, "Introduction to Data Science", https://leanpub.com/datasciencebook.
+* Supermarket dataset for predictive marketing 2023, https://www.kaggle.com/datasets/hunter0007/ecommerce-dataset-for-predictive-marketing-2023/data.
